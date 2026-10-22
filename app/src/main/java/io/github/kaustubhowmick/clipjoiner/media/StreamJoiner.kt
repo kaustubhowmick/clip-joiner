@@ -18,7 +18,11 @@ import java.nio.ByteBuffer
  */
 object StreamJoiner {
 
-    class Part(val uri: Uri)
+    /**
+     * @param audioDelayUs encoder priming at the start of this clip's audio (re-encoded clips);
+     *   the audio is moved earlier by this much and the priming dropped.
+     */
+    class Part(val uri: Uri, val audioDelayUs: Long = 0)
 
     /**
      * @param referenceIndex the part whose track formats define the output (a clip that is
@@ -71,22 +75,27 @@ object StreamJoiner {
                 f.audioIndex >= 0 -> ExtractorSource(context, part.uri, f.audioIndex)
                 else -> {
                     val af = audioFormat!!
+                    // Cover the clip's video to its last frame's end, so there is no gap
+                    // before the next clip's audio.
+                    val sampleRate = af.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    val frameUs = 1024L * 1_000_000 / sampleRate
                     val samples = SilentAudio.encode(
                         mime = af.getString(MediaFormat.KEY_MIME)!!,
-                        sampleRate = af.getInteger(MediaFormat.KEY_SAMPLE_RATE),
+                        sampleRate = sampleRate,
                         channels = af.getInteger(MediaFormat.KEY_CHANNEL_COUNT),
                         bitrate = af.intOr(MediaFormat.KEY_BIT_RATE, 0),
-                        durationUs = f.videoDurationUs,
-                    ).filter { it.ptsUs < f.videoDurationUs }
+                        durationUs = f.videoDurationUs + 3 * frameUs,
+                    ).filter { it.ptsUs < f.videoDurationUs + frameUs }
                     ListSource(samples, startUs = video.timeUs.coerceAtLeast(0))
                 }
             }
             try {
                 // Parameter sets that differ from the output header (e.g. a clip converted on this
-                // device, or a clip from another camera) go in-band in front of the clip's first
-                // frame, so the decoder switches to them at the boundary.
+                // device, or a clip from another camera) go in-band in front of each of the clip's
+                // keyframes, so the decoder switches to them at the boundary and after a seek.
                 val partCsd = csdOf(f.video)
-                var pendingCsd: ByteArray? = if (partCsd.isNotEmpty() && !partCsd.contentEquals(referenceCsd)) partCsd else null
+                val inBandCsd: ByteArray? = if (partCsd.isNotEmpty() && !partCsd.contentEquals(referenceCsd)) partCsd else null
+                val audioDelayUs = if (f.audioIndex >= 0) part.audioDelayUs else 0L
 
                 val startUs = minOf(video.timeUs.takeIf { it >= 0 } ?: Long.MAX_VALUE, audio?.timeUs?.takeIf { it >= 0 } ?: Long.MAX_VALUE)
                     .let { if (it == Long.MAX_VALUE) 0 else it }
@@ -101,22 +110,19 @@ object StreamJoiner {
                     val takeVideo = at < 0 || (vt in 0..at)
                     val source = if (takeVideo) video else audio!!
 
-                    val needed = source.sampleSize() + (pendingCsd?.size ?: 0)
+                    val prefix = if (takeVideo && inBandCsd != null && source.flags() != 0) inBandCsd else null
+                    val needed = source.sampleSize() + (prefix?.size ?: 0)
                     if (needed > buffer.capacity()) buffer = ByteBuffer.allocateDirect(needed + 1024 * 1024)
                     buffer.clear()
 
-                    val prefix = if (takeVideo) pendingCsd else null
                     val size = source.read(buffer, prefix?.size ?: 0)
                     if (size < 0) {
                         source.advance()
                         continue
                     }
-                    if (prefix != null) {
-                        writeParameterSets(buffer, prefix)
-                        pendingCsd = null
-                    }
+                    if (prefix != null) writeParameterSets(buffer, prefix)
                     val t = source.timeUs
-                    val ptsUs = offsetUs + (t - startUs)
+                    val ptsUs = offsetUs + (t - startUs) - (if (takeVideo) 0 else audioDelayUs)
                     info.set(0, size + (prefix?.size ?: 0), ptsUs, source.flags())
 
                     if (takeVideo) {
@@ -125,8 +131,8 @@ object StreamJoiner {
                     } else {
                         // Muxers need rising audio timestamps; a clip whose audio starts early
                         // (encoder priming) could otherwise overlap the previous clip's tail.
-                        audioStats.add(t)
-                        if (ptsUs > lastAudioPtsUs) {
+                        audioStats.add(t - audioDelayUs)
+                        if (ptsUs > lastAudioPtsUs && ptsUs >= offsetUs) {
                             muxer.writeSampleData(audioTrack, buffer, info)
                             lastAudioPtsUs = ptsUs
                         }
