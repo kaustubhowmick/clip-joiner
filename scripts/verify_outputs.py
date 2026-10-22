@@ -210,7 +210,9 @@ def check_case(name, case, clips_dir, out_path):
     if case["copy_only"]:
         check(abs(ratio - 1) <= 0.03, f"size {size/1e6:.2f} MB vs inputs {in_size/1e6:.2f} MB ({ratio:.3f}x)")
     else:
-        check(ratio <= 1.6, f"size {size/1e6:.2f} MB vs inputs {in_size/1e6:.2f} MB ({ratio:.3f}x, converted clip didn't balloon)")
+        # Converted clips are encoded at the copied clips' bitrate; encoders overshoot some
+        # (the emulator's software encoder by up to ~2x at these low test bitrates).
+        check(ratio <= 2.0, f"size {size/1e6:.2f} MB vs inputs {in_size/1e6:.2f} MB ({ratio:.3f}x, converted clip didn't balloon)")
     return failures, notes
 
 

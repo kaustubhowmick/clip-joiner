@@ -140,6 +140,35 @@ object StreamJoiner {
                     source.advance()
                     onProgress(((offsetUs + (t - startUs)).toFloat() / totalUs).coerceIn(0f, 1f))
                 }
+                // Re-encoded clips can come back with their audio trimmed a few frames short of the
+                // video; pad with silence so the next clip's sound doesn't start after a gap.
+                if (audioFormat != null && f.audioIndex >= 0) {
+                    val sampleRate = audioFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    val frameUs = 1024L * 1_000_000 / sampleRate
+                    val missing = ((videoStats.endUs() - audioStats.endUs() + frameUs / 2) / frameUs).toInt()
+                    if (missing > 0) {
+                        val pad = SilentAudio.encode(
+                            mime = audioFormat.getString(MediaFormat.KEY_MIME)!!,
+                            sampleRate = sampleRate,
+                            channels = audioFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT),
+                            bitrate = audioFormat.intOr(MediaFormat.KEY_BIT_RATE, 0),
+                            durationUs = (missing + 3) * frameUs,
+                        ).take(missing)
+                        var t = audioStats.endUs()
+                        for (sample in pad) {
+                            val ptsUs = offsetUs + (t - startUs)
+                            if (ptsUs > lastAudioPtsUs) {
+                                buffer.clear()
+                                buffer.put(sample.data)
+                                info.set(0, sample.data.size, ptsUs, MediaCodec.BUFFER_FLAG_KEY_FRAME)
+                                muxer.writeSampleData(audioTrack, buffer, info)
+                                lastAudioPtsUs = ptsUs
+                            }
+                            audioStats.add(t)
+                            t += frameUs
+                        }
+                    }
+                }
                 val partEnd = maxOf(videoStats.endUs(), audioStats.endUs())
                 offsetUs += (partEnd - startUs).coerceAtLeast(0)
             } finally {
