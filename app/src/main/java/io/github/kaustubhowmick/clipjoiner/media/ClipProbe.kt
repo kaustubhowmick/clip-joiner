@@ -52,7 +52,7 @@ object ClipProbe {
             val spanUs = if (frames > 1) maxPts - minPts else 0L
             val frameRate = when {
                 spanUs > 0 -> (frames - 1) * 1_000_000f / spanUs
-                vf.containsKey(MediaFormat.KEY_FRAME_RATE) -> vf.getNumber(MediaFormat.KEY_FRAME_RATE)
+                vf.containsKey(MediaFormat.KEY_FRAME_RATE) -> vf.floatValue(MediaFormat.KEY_FRAME_RATE)
                 else -> 0f
             }
             val videoDurationUs = vf.longOr(MediaFormat.KEY_DURATION, if (frameRate > 0) spanUs + (1_000_000 / frameRate).toLong() else spanUs)
@@ -135,5 +135,5 @@ internal fun MediaFormat.longOr(key: String, default: Long): Long =
 internal fun MediaFormat.intOr(key: String, default: Int): Int =
     if (containsKey(key)) getInteger(key) else default
 
-private fun MediaFormat.getNumber(key: String): Float =
+private fun MediaFormat.floatValue(key: String): Float =
     try { getInteger(key).toFloat() } catch (_: ClassCastException) { getFloat(key) }
