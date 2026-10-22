@@ -75,8 +75,8 @@ object StreamJoiner {
                 f.audioIndex >= 0 -> ExtractorSource(context, part.uri, f.audioIndex)
                 else -> {
                     val af = audioFormat!!
-                    // Cover the clip's video to its last frame's end, so there is no gap
-                    // before the next clip's audio.
+                    // Match the clip's video length to the nearest audio frame, so neither
+                    // track has a gap before the next clip.
                     val sampleRate = af.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                     val frameUs = 1024L * 1_000_000 / sampleRate
                     val samples = SilentAudio.encode(
@@ -85,7 +85,7 @@ object StreamJoiner {
                         channels = af.getInteger(MediaFormat.KEY_CHANNEL_COUNT),
                         bitrate = af.intOr(MediaFormat.KEY_BIT_RATE, 0),
                         durationUs = f.videoDurationUs + 3 * frameUs,
-                    ).filter { it.ptsUs < f.videoDurationUs + frameUs }
+                    ).filter { it.ptsUs + frameUs / 2 < f.videoDurationUs }
                     ListSource(samples, startUs = video.timeUs.coerceAtLeast(0))
                 }
             }

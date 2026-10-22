@@ -119,7 +119,15 @@ class MergeEngineTest {
 
     private fun decodeAllFrames(uri: Uri): Int {
         val ex = MediaExtractor()
-        ex.setDataSource(context, uri, null)
+        // Open by file descriptor, retrying once: right after the MediaStore entry is published
+        // the provider can briefly refuse it.
+        try {
+            context.contentResolver.openFileDescriptor(uri, "r")!!.use { ex.setDataSource(it.fileDescriptor) }
+        } catch (e: java.io.IOException) {
+            Log.w(TAG, "Retrying open of $uri", e)
+            SystemClock.sleep(1000)
+            context.contentResolver.openFileDescriptor(uri, "r")!!.use { ex.setDataSource(it.fileDescriptor) }
+        }
         val track = (0 until ex.trackCount).first { ex.getTrackFormat(it).getString(MediaFormat.KEY_MIME)!!.startsWith("video/") }
         val format = ex.getTrackFormat(track)
         ex.selectTrack(track)

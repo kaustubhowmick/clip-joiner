@@ -24,8 +24,11 @@ object EncoderDelay {
     @Synchronized
     fun aacDelayUs(sampleRate: Int, channels: Int): Long = cache.getOrPut("$sampleRate/$channels") {
         try {
-            val samples = measureSamples(sampleRate, channels)
-            Log.i(TAG, "AAC encoder delay at $sampleRate Hz x$channels: $samples samples")
+            val measured = measureSamples(sampleRate, channels)
+            // Priming is a whole number of AAC frames (1024 samples) in practice; the click's
+            // onset reads a sample or two late, so snap to the nearest frame.
+            val samples = (measured + 512) / 1024 * 1024
+            Log.i(TAG, "AAC encoder delay at $sampleRate Hz x$channels: measured $measured, using $samples samples")
             samples * 1_000_000L / sampleRate
         } catch (e: Exception) {
             Log.w(TAG, "Couldn't measure encoder delay; assuming 2048 samples", e)
